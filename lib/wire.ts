@@ -325,6 +325,8 @@ export async function* anthropicEventsFromOpenAI(upstream: ReadableStream<Uint8A
   const toolIndexes = new Map<number, number>();
   let inputTokens = 0;
   let outputTokens = 0;
+  /** Whether a text delta was emitted: a completion that produced text cost at least 1 output token. */
+  let sawText = false;
 
   const startEvents = (): string[] => {
     if (started) return [];
@@ -360,7 +362,9 @@ export async function* anthropicEventsFromOpenAI(upstream: ReadableStream<Uint8A
     finished = true;
     return [
       ...closeEvents(),
-      sseEvent('message_delta', { type: 'message_delta', delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: outputTokens } }),
+      // A completion that emitted text cost at least 1 output token, even when the stream's usage
+      // chunk never arrived: the wire requires an output count of at least 1.
+      sseEvent('message_delta', { type: 'message_delta', delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: outputTokens > 0 ? outputTokens : sawText ? 1 : 0 } }),
       sseEvent('message_stop', { type: 'message_stop' }),
     ];
   };
@@ -393,6 +397,7 @@ export async function* anthropicEventsFromOpenAI(upstream: ReadableStream<Uint8A
       const delta = isRecord(choice.delta) ? choice.delta : {};
       out.push(...startEvents());
       if (typeof delta.content === 'string' && delta.content !== '') {
+        sawText = true;
         if (textIndex === -1) {
           textIndex = nextIndex;
           nextIndex += 1;
